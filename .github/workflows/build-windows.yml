@@ -6,6 +6,9 @@ env:
   # using older version due to severe memory leak
   # https://qt-project.atlassian.net/browse/QTBUG-141377
   QT_VERSION: "6.9.3"
+  QT_INSTALL_DIR: "C:/qt/6.9.3/msvc2022_64"
+  QT_BUILD_DIR: "C:/qt-build"
+  QT_SRC_DIR: "C:/qt-src"
 
 on:
   workflow_call:
@@ -22,34 +25,102 @@ jobs:
         include:
           - artifact: windows-x64
             qt_arch: win64_msvc2022_64
-            mpv_arch: x86_64-v3
-            mpv_arch_fallback: x86_64
+            mpv_arch: x86_64
+            mpv_arch_fallback: ""
             vc_redist_arch: x64
             vcvars: vcvars64.bat
             machine: X64
-          # ARM64 disabled - requires qt webengine builds
-          # - artifact: windows-arm64
-          #   qt_arch: win64_msvc2022_arm64
-          #   mpv_arch: aarch64
-          #   mpv_arch_fallback: ""
-          #   vc_redist_arch: arm64
-          #   vcvars: vcvarsamd64_arm64.bat
-          #   machine: ARM64
     runs-on: windows-latest
     steps:
-    - uses: actions/checkout@v7
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
-    - name: Install Qt 6
-      uses: jurplel/install-qt-action@v4
+
+    - name: Restore cached Qt 6 build and install
+      id: qt-cache
+      uses: actions/cache/restore@v4
       with:
-        version: "${{ env.QT_VERSION }}"
-        arch: "${{ matrix.qt_arch }}"
-        modules: "qtwebengine qtwebchannel qtpositioning"
+        path: |
+          ${{ env.QT_INSTALL_DIR }}
+          ${{ env.QT_BUILD_DIR }}
+        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-
+
+    - name: Install Qt 6 build prerequisites
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      run: |
+        choco install winflexbison3 gperf -y
+        python -m pip install --upgrade pip
+        python -m pip install html5lib
+      shell: powershell
+
+    - name: Download Qt ${{ env.QT_VERSION }} source
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      run: |
+        $qtMajorMinor = "${{ env.QT_VERSION }}".Substring(0, "${{ env.QT_VERSION }}".LastIndexOf('.'))
+        $url = "https://download.qt.io/archive/qt/$qtMajorMinor/${{ env.QT_VERSION }}/single/qt-everywhere-src-${{ env.QT_VERSION }}.tar.xz"
+        curl.exe -L "$url" -o qt-src.tar.xz
+        New-Item -ItemType Directory -Force -Path "${{ env.QT_SRC_DIR }}" | Out-Null
+        tar -xf qt-src.tar.xz -C "${{ env.QT_SRC_DIR }}" --strip-components=1
+        Remove-Item qt-src.tar.xz
+      shell: powershell
+
+    - name: Build Qt ${{ env.QT_VERSION }} from source (no-avx2)
+      id: build-qt
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      timeout-minutes: 330
+      continue-on-error: true
+      run: |
+        set "VS_PATH="
+        for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath 2^>nul') do set "VS_PATH=%%i"
+        if not defined VS_PATH (
+            for /d %%d in ("C:\Program Files\Microsoft Visual Studio\*") do (
+                for /d %%e in ("%%d\*") do (
+                    if exist "%%e\VC\Auxiliary\Build\${{ matrix.vcvars }}" set "VS_PATH=%%e"
+                )
+            )
+        )
+        call "%VS_PATH%\VC\Auxiliary\Build\${{ matrix.vcvars }}"
+        if not exist "${{ env.QT_BUILD_DIR }}" mkdir "${{ env.QT_BUILD_DIR }}"
+        cd /d "${{ env.QT_BUILD_DIR }}"
+        if not exist "CMakeCache.txt" (
+            call "${{ env.QT_SRC_DIR }}\configure.bat" ^
+              -prefix "${{ env.QT_INSTALL_DIR }}" ^
+              -opensource -confirm-license ^
+              -release ^
+              -no-avx -no-avx2 -no-avx512 ^
+              -nomake examples -nomake tests ^
+              -submodules qtbase,qtshadertools,qtdeclarative,qtwebchannel,qtpositioning,qtwebengine ^
+              -- -DQT_FEATURE_webengine_proprietary_codecs=OFF
+            if errorlevel 1 exit /b 1
+        )
+        cmake --build . --parallel
+        if errorlevel 1 exit /b 1
+        cmake --install .
+      shell: cmd
+
+    - name: Save Qt 6 build and install cache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          ${{ env.QT_INSTALL_DIR }}
+          ${{ env.QT_BUILD_DIR }}
+        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-${{ github.run_id }}-${{ github.run_attempt }}
+
+    - name: Verify Qt 6 build completed
+      if: steps.build-qt.outcome == 'failure' || steps.build-qt.outcome == 'cancelled'
+      run: |
+        echo "Qt 6 build did not finish within the 5.5-hour window. Partial progress has been cached; re-run this workflow to resume."
+        exit 1
+      shell: bash
+
     - name: Install Inno Setup
       run: |
         choco install innosetup -y
       shell: powershell
+
     - name: Install dependencies
       run: |
         mkdir build
@@ -69,11 +140,11 @@ jobs:
           mv mpv-fallback-tmp/libmpv-2.dll build/mpv-fallback/
         fi
       shell: bash
+
     - name: Bundle VC runtime DLLs
       run: |
         mkdir deps
         mkdir deps/vcruntime
-        # Dynamically locate VS installation on runner
         $vsPath = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath
         if (-not $vsPath) {
             $vsPath = (Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*" | Where-Object { Test-Path "$_\VC\Redist\MSVC" } | Select-Object -First 1).FullName
@@ -83,9 +154,9 @@ jobs:
             $vsRedist = Get-ChildItem "$vsPath\VC\Redist\MSVC" -Recurse -Filter "Microsoft.VC*.CRT" | Where-Object { $_.FullName -like "*${{ matrix.vc_redist_arch }}*" } | Select-Object -First 1
         }
         Copy-Item "$vsRedist\*.dll" deps/vcruntime/
-        # Also grab VCRedist installer for optional system-wide install
         Invoke-WebRequest -Uri "https://aka.ms/vs/17/release/vc_redist.x64.exe" -OutFile deps/vc_redist.x64.exe
       shell: powershell
+
     - name: Build
       run: |
         set "VS_PATH="
@@ -99,20 +170,22 @@ jobs:
         )
         call "%VS_PATH%\VC\Auxiliary\Build\${{ matrix.vcvars }}"
         cd build
-        set PATH=%PATH%;C:\Program Files (x86)\Inno Setup 6;%CD%
-        set "QT_ROOT_DIR=%QT_ROOT_DIR:\=/%"
+        set "PATH=%PATH%;C:\Program Files (x86)\Inno Setup 6;%CD%;${{ env.QT_INSTALL_DIR }}\bin"
+        set "QT_ROOT_DIR=${{ env.QT_INSTALL_DIR }}"
         cmake -GNinja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=output -DQTROOT=%QT_ROOT_DIR% -DMPV_INCLUDE_DIR=mpv/include -DMPV_LIBRARY=mpv/libmpv-2.dll -DCHECK_FOR_UPDATES=ON -DUSE_STATIC_MPVQT=ON ..
         lib /def:mpv\mpv.def /out:mpv\libmpv-2.dll.lib /MACHINE:${{ matrix.machine }}
         ninja
         ninja windows_all
       shell: cmd
+
     - name: Archive installer
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact }}-installer
         path: ${{ github.workspace }}/build/JellyfinDesktop-*.exe
+
     - name: Archive portable ZIP
-      uses: actions/upload-artifact@v7
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ matrix.artifact }}-portable
         path: ${{ github.workspace }}/build/JellyfinDesktop-*.zip
