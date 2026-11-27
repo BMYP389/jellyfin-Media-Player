@@ -43,20 +43,21 @@ jobs:
         path: |
           ${{ env.QT_INSTALL_DIR }}
           ${{ env.QT_BUILD_DIR }}
-        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-${{ github.run_id }}-${{ github.run_attempt }}
+        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-webengine-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
+          qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-webengine-
           qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-
 
     - name: Install Qt 6 build prerequisites
-      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6WebEngineQuick/Qt6WebEngineQuickConfig.cmake')"
       run: |
-        choco install winflexbison3 gperf -y
+        choco install winflexbison3 gperf nodejs-lts -y
         python -m pip install --upgrade pip
         python -m pip install html5lib
       shell: powershell
 
     - name: Download Qt ${{ env.QT_VERSION }} source
-      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6WebEngineQuick/Qt6WebEngineQuickConfig.cmake')"
       run: |
         $qtMajorMinor = "${{ env.QT_VERSION }}".Substring(0, "${{ env.QT_VERSION }}".LastIndexOf('.'))
         $url = "https://download.qt.io/archive/qt/$qtMajorMinor/${{ env.QT_VERSION }}/single/qt-everywhere-src-${{ env.QT_VERSION }}.tar.xz"
@@ -68,7 +69,7 @@ jobs:
 
     - name: Build Qt ${{ env.QT_VERSION }} from source (no-avx2)
       id: build-qt
-      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake')"
+      if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6WebEngineQuick/Qt6WebEngineQuickConfig.cmake')"
       timeout-minutes: 330
       continue-on-error: true
       run: |
@@ -84,20 +85,24 @@ jobs:
         call "%VS_PATH%\VC\Auxiliary\Build\${{ matrix.vcvars }}"
         if not exist "${{ env.QT_BUILD_DIR }}" mkdir "${{ env.QT_BUILD_DIR }}"
         cd /d "${{ env.QT_BUILD_DIR }}"
-        if not exist "CMakeCache.txt" (
-            call "${{ env.QT_SRC_DIR }}\configure.bat" ^
-              -prefix "${{ env.QT_INSTALL_DIR }}" ^
-              -opensource -confirm-license ^
-              -release ^
-              -no-avx -no-avx2 -no-avx512 ^
-              -nomake examples -nomake tests ^
-              -submodules qtbase,qtshadertools,qtdeclarative,qtwebchannel,qtpositioning,qtwebengine ^
-              -- -DQT_FEATURE_webengine_proprietary_codecs=OFF
-            if errorlevel 1 exit /b 1
-        )
+        if exist "CMakeCache.txt" del /f /q "CMakeCache.txt"
+        call "${{ env.QT_SRC_DIR }}\configure.bat" ^
+          -prefix "${{ env.QT_INSTALL_DIR }}" ^
+          -opensource -confirm-license ^
+          -release ^
+          -no-avx -no-avx2 -no-avx512 ^
+          -nomake examples -nomake tests ^
+          -submodules qtbase,qtshadertools,qtdeclarative,qtwebchannel,qtpositioning,qtwebengine ^
+          -- -DQT_FEATURE_webengine_proprietary_codecs=OFF
+        if errorlevel 1 exit /b 1
         cmake --build . --parallel
         if errorlevel 1 exit /b 1
         cmake --install .
+        if errorlevel 1 exit /b 1
+        if not exist "${{ env.QT_INSTALL_DIR }}\lib\cmake\Qt6WebEngineQuick\Qt6WebEngineQuickConfig.cmake" (
+            echo ERROR: Qt6WebEngineQuickConfig.cmake was still not generated! Check configure summary above.
+            exit /b 1
+        )
       shell: cmd
 
     - name: Save Qt 6 build and install cache
@@ -107,12 +112,12 @@ jobs:
         path: |
           ${{ env.QT_INSTALL_DIR }}
           ${{ env.QT_BUILD_DIR }}
-        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-${{ github.run_id }}-${{ github.run_attempt }}
+        key: qt-src-${{ env.QT_VERSION }}-${{ matrix.qt_arch }}-noavx2-webengine-${{ github.run_id }}-${{ github.run_attempt }}
 
     - name: Verify Qt 6 build completed
       if: steps.build-qt.outcome == 'failure' || steps.build-qt.outcome == 'cancelled'
       run: |
-        echo "Qt 6 build did not finish within the 5.5-hour window. Partial progress has been cached; re-run this workflow to resume."
+        echo "Qt 6 build did not finish within the 5.5-hour window or failed. Partial progress has been cached; re-run this workflow to resume."
         exit 1
       shell: bash
 
