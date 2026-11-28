@@ -62,7 +62,7 @@ jobs:
         python -m pip install html5lib spdx-tools
       shell: powershell
 
-   - name: Download Qt ${{ env.QT_VERSION }} source
+    - name: Download Qt ${{ env.QT_VERSION }} source
       if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6WebEngineQuick/Qt6WebEngineQuickConfig.cmake')"
       run: |
         $ver = "${{ env.QT_VERSION }}"
@@ -76,8 +76,6 @@ jobs:
         if ($LASTEXITCODE -ne 0) { exit 1 }
         Remove-Item -Force qt-src.tar.xz
       shell: powershell
-
-
 
     - name: Build Qt ${{ env.QT_VERSION }} from source (no-avx2)
       id: build-qt
