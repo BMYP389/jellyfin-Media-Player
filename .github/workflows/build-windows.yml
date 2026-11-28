@@ -73,6 +73,7 @@ jobs:
       timeout-minutes: 330
       continue-on-error: true
       run: |
+        set "PATH=C:\ProgramData\chocolatey\bin;C:\Program Files\nodejs;%PATH%"
         set "VS_PATH="
         for /f "tokens=*" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath 2^>nul') do set "VS_PATH=%%i"
         if not defined VS_PATH (
@@ -95,15 +96,23 @@ jobs:
           -submodules qtbase,qtshadertools,qtdeclarative,qtwebchannel,qtpositioning,qtwebengine ^
           -- -DQT_FEATURE_webengine_proprietary_codecs=OFF
         if errorlevel 1 exit /b 1
+        type config.summary
+        findstr /C:"Qt WebEngine" config.summary
+        findstr /C:"Build QtWebEngine ...................... yes" config.summary
+        if errorlevel 1 (
+            echo ERROR: QtWebEngine was disabled during configure! See config.summary above.
+            exit /b 1
+        )
         cmake --build . --parallel
         if errorlevel 1 exit /b 1
         cmake --install .
         if errorlevel 1 exit /b 1
         if not exist "${{ env.QT_INSTALL_DIR }}\lib\cmake\Qt6WebEngineQuick\Qt6WebEngineQuickConfig.cmake" (
-            echo ERROR: Qt6WebEngineQuickConfig.cmake was still not generated! Check configure summary above.
+            echo ERROR: Qt6WebEngineQuickConfig.cmake was still not generated!
             exit /b 1
         )
       shell: cmd
+
 
     - name: Save Qt 6 build and install cache
       if: always()
