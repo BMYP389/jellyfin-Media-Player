@@ -62,16 +62,22 @@ jobs:
         python -m pip install html5lib spdx-tools
       shell: powershell
 
-    - name: Download Qt ${{ env.QT_VERSION }} source
+   - name: Download Qt ${{ env.QT_VERSION }} source
       if: "!hashFiles('C:/qt/6.9.3/msvc2022_64/lib/cmake/Qt6WebEngineQuick/Qt6WebEngineQuickConfig.cmake')"
       run: |
-        $qtMajorMinor = "${{ env.QT_VERSION }}".Substring(0, "${{ env.QT_VERSION }}".LastIndexOf('.'))
-        $url = "https://qt.io{{ env.QT_VERSION }}/single/qt-everywhere-src-${{ env.QT_VERSION }}.tar.xz"
-        curl.exe -L "$url" -o qt-src.tar.xz
+        $ver = "${{ env.QT_VERSION }}"
+        $majorMinor = $ver.Substring(0, $ver.LastIndexOf('.'))
+        $url = "https://qt.io"
+        Write-Host "Downloading $url"
+        curl.exe -fL "$url" -o qt-src.tar.xz
+        if ($LASTEXITCODE -ne 0) { exit 1 }
         New-Item -ItemType Directory -Force -Path "${{ env.QT_SRC_DIR }}" | Out-Null
         tar -xf qt-src.tar.xz -C "${{ env.QT_SRC_DIR }}" --strip-components=1
-        Remove-Item qt-src.tar.xz
+        if ($LASTEXITCODE -ne 0) { exit 1 }
+        Remove-Item -Force qt-src.tar.xz
       shell: powershell
+
+
 
     - name: Build Qt ${{ env.QT_VERSION }} from source (no-avx2)
       id: build-qt
